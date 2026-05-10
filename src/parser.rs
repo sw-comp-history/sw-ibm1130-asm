@@ -173,7 +173,10 @@ fn parse_instruction(
     let mut mask: Option<Operand> = None;
 
     // Read flag tokens 'I' / 'L' (case-insensitive). We accept any
-    // mix; `I` implies long form regardless.
+    // mix; `I` implies long form regardless. To avoid eating the
+    // operand (which may itself be named `I` or `L`), only consume
+    // an `I`/`L` token as a flag if there is at least one more
+    // token after it on the line.
     loop {
         cursor.skip_whitespace();
         let saved = cursor.pos;
@@ -181,15 +184,33 @@ fn parse_instruction(
         match cursor.read_ident() {
             Some(ident) => {
                 let lower = ident.to_ascii_lowercase();
+                let is_flag_candidate = matches!(lower.as_str(), "i" | "l");
+                if !is_flag_candidate {
+                    cursor.pos = saved;
+                    cursor.col = saved_col;
+                    break;
+                }
+                // Peek ahead: is there more input after this token?
+                // If not, this token is the operand, not a flag.
+                let mut probe = cursor.pos;
+                while probe < cursor.src.len() {
+                    let b = cursor.src.as_bytes()[probe];
+                    if b == b' ' || b == b'\t' {
+                        probe += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if probe >= cursor.src.len() {
+                    // No more tokens -- treat as operand.
+                    cursor.pos = saved;
+                    cursor.col = saved_col;
+                    break;
+                }
                 match lower.as_str() {
                     "i" => indirect_flag = true,
                     "l" => long_flag = true,
-                    _ => {
-                        // Not a flag; rewind and continue.
-                        cursor.pos = saved;
-                        cursor.col = saved_col;
-                        break;
-                    }
+                    _ => unreachable!(),
                 }
             }
             None => break,

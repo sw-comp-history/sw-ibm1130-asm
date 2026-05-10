@@ -206,7 +206,9 @@ fn wait_is_short_only_no_operand() {
 
 #[test]
 fn wait_with_l_flag_is_error() {
-    let err = assemble_err("        WAIT L\n");
+    // L is only treated as a flag when followed by another token,
+    // so we add a numeric operand to force the L-as-flag parse.
+    let err = assemble_err("        WAIT L 100\n");
     assert!(
         err.message.contains("no long form"),
         "unexpected error: {err}"
