@@ -1,0 +1,10 @@
+[package]
+name = "sw-ibm1130-asm"
+version = "0.1.0"
+edition = "2024"
+description = "IBM 1130 Assembler: text source to instruction bytes"
+license = "MIT"
+
+[dependencies]
+sw-isa-core = { path = "/Users/mike/github/sw-langtools/sw-isa-core" }
+sw-ibm1130-isa = { path = "../sw-ibm1130-isa" }
