@@ -38,6 +38,7 @@ pub fn emit_pass2(lines: &[ParsedLine], symbols: &SymbolTable) -> Result<AsmOutp
                             op: Opcode::Wait,
                             tag: 0,
                             indirect: false,
+                            mask: 0,
                             address: 0,
                         });
                     }
@@ -54,6 +55,7 @@ pub fn emit_pass2(lines: &[ParsedLine], symbols: &SymbolTable) -> Result<AsmOutp
                         op: Opcode::Wait,
                         tag: 0,
                         indirect: false,
+                        mask: 0,
                         address: v as u16,
                     });
                     lc += 1;
@@ -146,12 +148,44 @@ fn build_long(
             format!("address {address} out of range for long form (16-bit)"),
         ));
     }
+    let mask = match &insn.mask {
+        Some(o) => {
+            let v = resolve(o, symbols, line)?;
+            if !accepts_mask(&insn.mnemonic) {
+                return Err(AsmError::new(
+                    line,
+                    insn.mnemonic_col,
+                    format!(
+                        "`{}` long form does not accept a condition mask (mask is BSC/BSI only)",
+                        insn.mnemonic
+                    ),
+                ));
+            }
+            if !(0..=0x7F).contains(&v) {
+                return Err(AsmError::new(
+                    line,
+                    insn.mnemonic_col,
+                    format!("condition mask {v:#x} out of range (0..=0x7F)"),
+                ));
+            }
+            v as u8
+        }
+        None => 0,
+    };
     Ok(Instruction::Long {
         op,
         tag: insn.tag,
         indirect: insn.indirect_flag,
+        mask,
         address: address as u16,
     })
+}
+
+/// Mnemonics whose long form accepts a condition mask. Per the 1130
+/// FC manual and Moore's 1968 source: BSC and BSI. All other
+/// long-form opcodes must have mask = 0.
+fn accepts_mask(mnem: &str) -> bool {
+    matches!(mnem, "bsc" | "bsi")
 }
 
 fn resolve(op: &Operand, symbols: &SymbolTable, line: u32) -> Result<i64, AsmError> {

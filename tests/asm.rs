@@ -106,6 +106,7 @@ fn add_long_form_via_l_flag() {
             op,
             tag,
             indirect,
+            mask: _,
             address,
         } => {
             assert_eq!(*op, Opcode::Add);
@@ -125,6 +126,7 @@ fn ld_indirect_implies_long() {
             op,
             tag,
             indirect,
+            mask: _,
             address,
         } => {
             assert_eq!(*op, Opcode::Load);
@@ -157,6 +159,7 @@ fn ld_with_tag_long() {
             op,
             tag,
             indirect,
+            mask: _,
             address,
         } => {
             assert_eq!(*op, Opcode::Load);

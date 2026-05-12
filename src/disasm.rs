@@ -42,6 +42,7 @@ pub fn render_instruction(insn: &Instruction) -> String {
             op,
             tag,
             indirect,
+            mask,
             address,
         } => {
             let mnem = op.mnemonic();
@@ -58,6 +59,9 @@ pub fn render_instruction(insn: &Instruction) -> String {
                 s.push(',');
             }
             s.push_str(&format!("0x{:04x}", address));
+            if *mask != 0 {
+                s.push_str(&format!(", 0x{:02x}", mask));
+            }
             s
         }
     }
