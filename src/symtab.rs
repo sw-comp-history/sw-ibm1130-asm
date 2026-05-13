@@ -80,7 +80,7 @@ pub fn build_pass1(lines: &[ParsedLine]) -> Result<SymbolTable, AsmError> {
                             "ORG cannot have a label",
                         ));
                     }
-                    let v = resolve_pass1(op, &symtab, line.line)?;
+                    let v = resolve_pass1(op, &symtab, lc, line.line)?;
                     lc = v;
                 }
                 Directive::Equ(op) => {
@@ -88,7 +88,7 @@ pub fn build_pass1(lines: &[ParsedLine]) -> Result<SymbolTable, AsmError> {
                         .label
                         .as_ref()
                         .ok_or_else(|| AsmError::new(line.line, 1, "EQU requires a label"))?;
-                    let v = resolve_pass1(op, &symtab, line.line)?;
+                    let v = resolve_pass1(op, &symtab, lc, line.line)?;
                     symtab.define(&label.name, v, line.line, label.col)?;
                 }
                 Directive::Dc(_) => {
@@ -97,7 +97,28 @@ pub fn build_pass1(lines: &[ParsedLine]) -> Result<SymbolTable, AsmError> {
                     }
                     lc += 1;
                 }
-                Directive::End => {
+                Directive::Bss(op) => {
+                    if let Some(label) = &line.label {
+                        symtab.define(&label.name, lc, line.line, label.col)?;
+                    }
+                    let n = resolve_pass1(op, &symtab, lc, line.line)?;
+                    if n < 0 {
+                        return Err(AsmError::new(
+                            line.line,
+                            1,
+                            format!("BSS size must be non-negative; got {n}"),
+                        ));
+                    }
+                    lc += n;
+                }
+                Directive::Abs => {
+                    // ABS is a no-op marker: declares the program
+                    // as non-relocatable. We don't relocate.
+                    if let Some(label) = &line.label {
+                        symtab.define(&label.name, lc, line.line, label.col)?;
+                    }
+                }
+                Directive::End(_entry) => {
                     if let Some(label) = &line.label {
                         symtab.define(&label.name, lc, line.line, label.col)?;
                     }
@@ -143,7 +164,7 @@ pub(crate) fn instruction_size_words(insn: &crate::parser::Instruction) -> i64 {
 /// Resolve an operand during pass 1. Symbols must already be in the
 /// symbol table (forward references in `ORG` / `EQU` expressions
 /// are not supported).
-fn resolve_pass1(op: &Operand, symtab: &SymbolTable, line: u32) -> Result<i64, AsmError> {
+fn resolve_pass1(op: &Operand, symtab: &SymbolTable, lc: i64, line: u32) -> Result<i64, AsmError> {
     match op {
         Operand::Number(n) => Ok(*n),
         Operand::Symbol(name) => symtab.lookup(name).ok_or_else(|| {
@@ -153,5 +174,10 @@ fn resolve_pass1(op: &Operand, symtab: &SymbolTable, line: u32) -> Result<i64, A
                 format!("undefined symbol `{name}` (forward references not allowed in pass 1)"),
             )
         }),
+        Operand::LocationCounter => Ok(lc),
+        Operand::Offset { base, delta } => {
+            let v = resolve_pass1(base, symtab, lc, line)?;
+            Ok(v + *delta)
+        }
     }
 }

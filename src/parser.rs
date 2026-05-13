@@ -37,8 +37,18 @@ pub enum Directive {
     Equ(Operand),
     /// `DC N` -- emit one literal word.
     Dc(Operand),
-    /// `END` -- end of source (anything after is ignored).
-    End,
+    /// `BSS N` -- reserve N words at the current location counter
+    /// (emits N zero words). The label, if any, binds to the
+    /// pre-advance LC value.
+    Bss(Operand),
+    /// `ABS` -- absolute (non-relocatable) program marker. No-op
+    /// for us (we don't relocate); accepted for compatibility with
+    /// historical 1130 source.
+    Abs,
+    /// `END [LABEL]` -- end of source; the optional operand names
+    /// the program's entry point. Stored but not currently emitted
+    /// in the output.
+    End(Option<Operand>),
 }
 
 /// Parsed instruction body; address resolution happens in pass 2.
@@ -55,10 +65,25 @@ pub struct Instruction {
     pub mask: Option<Operand>,
 }
 
+/// An operand expression.
+///
+/// Most operands are a bare `Number` or `Symbol`. The `*`
+/// (location-counter) sentinel and small `±N` offsets are supported
+/// for compatibility with the historical 1130 source style
+/// (`SYM+1`, `*-2`, etc.). Full expression parsing (multi-term
+/// arithmetic) is out of scope; the offset form covers Moore's
+/// actual usage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operand {
     Number(i64),
     Symbol(String),
+    /// `*` -- the current pass-2 location counter.
+    LocationCounter,
+    /// `base + delta` (or `base - delta` with delta negated).
+    Offset {
+        base: Box<Operand>,
+        delta: i64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +108,22 @@ fn parse_line(line: u32, src: &str) -> Result<ParsedLine, AsmError> {
     // Strip trailing comment first.
     let src = strip_comment(src);
     if src.trim().is_empty() {
+        return Ok(ParsedLine {
+            line,
+            label: None,
+            body: LineBody::Empty,
+        });
+    }
+
+    // Whole-line comments from historical 1130 source:
+    //   "// JOB", "// ASM"        -- 1130 monitor job-card directives
+    //   "*LIST ALL", "*..."       -- asm listing-output directives
+    // Treat the line as empty.
+    let trimmed = src.trim_start();
+    if trimmed.starts_with("//") || trimmed.starts_with('*') {
+        // Note: `*` as a comment-line marker is unambiguous because
+        // `*` in an operand position (current LC) is only ever read
+        // inside parse_operand, not at line start.
         return Ok(ParsedLine {
             line,
             label: None,
@@ -144,7 +185,20 @@ fn parse_line(line: u32, src: &str) -> Result<ParsedLine, AsmError> {
             let op = parse_one_operand(&mut cursor)?;
             LineBody::Directive(Directive::Dc(op))
         }
-        "end" => LineBody::Directive(Directive::End),
+        "bss" => {
+            let op = parse_one_operand(&mut cursor)?;
+            LineBody::Directive(Directive::Bss(op))
+        }
+        "abs" => LineBody::Directive(Directive::Abs),
+        "end" => {
+            cursor.skip_whitespace();
+            let entry = if cursor.eof() {
+                None
+            } else {
+                Some(parse_one_operand(&mut cursor)?)
+            };
+            LineBody::Directive(Directive::End(entry))
+        }
         _ => parse_instruction(&mut cursor, mnemonic, mnemonic_col)?,
     };
 
@@ -300,10 +354,56 @@ fn parse_operand(cursor: &mut Cursor) -> Result<Operand, AsmError> {
     parse_operand_text(cursor.line, col, &token)
 }
 
+/// Try to split an operand token into a base term plus an optional
+/// `±N` offset. Handles forms like `SYM+1`, `*-2`, `0x10+5`, etc.
+/// The split point is the LAST `+` or `-` that is not part of a
+/// leading sign or a hex/decimal literal's leading sign and whose
+/// right-hand side parses as a number.
+fn split_offset(text: &str) -> Option<(&str, i64)> {
+    // Look for a `+` or `-` after position 0 (so a leading `-` is
+    // not split off). We scan from the right so chains like
+    // `A+B+1` would prefer the rightmost split; but multi-term
+    // chains aren't supported anyway.
+    let bytes = text.as_bytes();
+    for i in (1..bytes.len()).rev() {
+        let b = bytes[i];
+        if b != b'+' && b != b'-' {
+            continue;
+        }
+        // The byte before this must NOT be another sign-like
+        // character (would mean a two-char `+-` etc.) or the start
+        // of a hex/octal/binary prefix where the sign belongs to
+        // the literal. Simplest rule: split only when the prior
+        // byte is alphanumeric or `_` or `*`. That covers
+        // `SYM+1` and `*-2` and rules out `0x-1`.
+        let prev = bytes[i - 1];
+        if !(prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'.' || prev == b'*') {
+            continue;
+        }
+        let lhs = &text[..i];
+        let rhs = &text[i..]; // includes sign
+        let delta = parse_number(rhs)?;
+        return Some((lhs.trim_end(), delta));
+    }
+    None
+}
+
 fn parse_operand_text(line: u32, col: u32, text: &str) -> Result<Operand, AsmError> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Err(AsmError::new(line, col, "empty operand"));
+    }
+    // Offset form: split off a trailing `±N` if present.
+    if let Some((lhs, delta)) = split_offset(trimmed) {
+        let base = parse_operand_text(line, col, lhs)?;
+        return Ok(Operand::Offset {
+            base: Box::new(base),
+            delta,
+        });
+    }
+    // `*` = current location counter (pass-2-resolved).
+    if trimmed == "*" {
+        return Ok(Operand::LocationCounter);
     }
     if let Some(n) = parse_number(trimmed) {
         return Ok(Operand::Number(n));
@@ -332,6 +432,9 @@ fn parse_number(s: &str) -> Option<i64> {
     };
     let body = body.trim();
     let n = if let Some(hex) = body.strip_prefix("0x").or_else(|| body.strip_prefix("0X")) {
+        i64::from_str_radix(hex, 16).ok()?
+    } else if let Some(hex) = body.strip_prefix('/') {
+        // Historical 1130 asm hex literal: `/XXX` = hex value.
         i64::from_str_radix(hex, 16).ok()?
     } else if let Some(bin) = body.strip_prefix("0b").or_else(|| body.strip_prefix("0B")) {
         i64::from_str_radix(bin, 2).ok()?
