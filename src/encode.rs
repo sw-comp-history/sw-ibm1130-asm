@@ -91,9 +91,26 @@ pub fn emit_pass2(lines: &[ParsedLine], symbols: &SymbolTable) -> Result<AsmOutp
             LineBody::Instruction(insn) => {
                 let opcode = mnemonic_to_opcode(&insn.mnemonic, line.line, insn.mnemonic_col)?;
                 let force_short = is_short_only(&insn.mnemonic);
-                let want_long =
-                    (insn.long_flag || insn.indirect_flag || is_long_only(&insn.mnemonic))
-                        && !force_short;
+                // Auto-promote to long form when the operand is a
+                // symbol or expression (i.e. anything other than a
+                // bare number). Numbers default to short (the user
+                // can override with `L`); symbols typically resolve
+                // out of short-form's 8-bit range, and the 1968 IBM
+                // 1130 Assembler made this auto-promote silently
+                // for symbolic operands. Replicate that behaviour
+                // to keep historical source ingestible without
+                // sprinkling `L` flags across hundreds of lines.
+                let symbolic_operand = matches!(
+                    &insn.operand,
+                    Some(Operand::Symbol(_))
+                        | Some(Operand::LocationCounter)
+                        | Some(Operand::Offset { .. })
+                );
+                let want_long = (insn.long_flag
+                    || insn.indirect_flag
+                    || is_long_only(&insn.mnemonic)
+                    || symbolic_operand)
+                    && !force_short;
 
                 if force_short && (insn.long_flag || insn.indirect_flag) {
                     return Err(AsmError::new(

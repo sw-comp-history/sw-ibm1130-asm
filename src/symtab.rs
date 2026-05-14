@@ -152,12 +152,18 @@ pub(crate) fn instruction_size_words(insn: &crate::parser::Instruction) -> i64 {
     if insn.long_flag || insn.indirect_flag {
         return 2;
     }
-    // Default: short. Pass 2 may promote when displacement is out of
-    // range, but that requires knowing the operand value, which in
-    // general isn't known until pass 1 has finished. For predictable
-    // sizing we require the user to mark long form explicitly with
-    // `L` or `I` when the operand is a large symbol; otherwise pass
-    // 2 will try short and error on out-of-range.
+    // Auto-promote symbolic operands to long form (matches the
+    // 1968 IBM 1130 Assembler's behaviour for ingesting historical
+    // source). Numeric operands default to short.
+    let symbolic_operand = matches!(
+        &insn.operand,
+        Some(crate::parser::Operand::Symbol(_))
+            | Some(crate::parser::Operand::LocationCounter)
+            | Some(crate::parser::Operand::Offset { .. })
+    );
+    if symbolic_operand {
+        return 2;
+    }
     1
 }
 
