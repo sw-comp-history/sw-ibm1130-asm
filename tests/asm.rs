@@ -623,6 +623,57 @@ fn error_slt_count_out_of_range() {
 }
 
 #[test]
+fn multiplication_operator_two_constants() {
+    let out = assemble_ok("DC 2*5\n");
+    assert_eq!(out.bytes, vec![0x00, 0x0A]);
+}
+
+#[test]
+fn multiplication_operator_constant_times_symbol() {
+    let out = assemble_ok(
+        "BASE: DC 0\n\
+                DC 2*BASE\n",
+    );
+    // BASE = 0; 2*0 = 0 (trivially). Confirm the form parses.
+    assert_eq!(out.symbols.lookup("BASE"), Some(0));
+}
+
+#[test]
+fn multiplication_then_offset_composes() {
+    // 2*X + 5 should resolve as (2 * value-of-X) + 5.
+    let out = assemble_ok(
+        "        ORG 10\n\
+         X:     DC 0\n\
+                DC 2*X+3\n",
+    );
+    // X = 10; 2*X + 3 = 23 = 0x17.
+    let result_word = &out.bytes[out.bytes.len() - 2..];
+    assert_eq!(result_word, &[0x00, 0x17u8]);
+}
+
+#[test]
+fn star_alone_still_means_lc_not_multiply() {
+    let out = assemble_ok(
+        "        ORG 7\n\
+                DC *\n",
+    );
+    // * = LC = 7.
+    let result_word = &out.bytes[out.bytes.len() - 2..];
+    assert_eq!(result_word, &[0x00, 0x07]);
+}
+
+#[test]
+fn star_minus_n_still_means_lc_offset_not_multiply() {
+    let out = assemble_ok(
+        "        ORG 10\n\
+                DC *-3\n",
+    );
+    // *-3 = LC - 3 = 10 - 3 = 7.
+    let result_word = &out.bytes[out.bytes.len() - 2..];
+    assert_eq!(result_word, &[0x00, 0x07]);
+}
+
+#[test]
 fn error_slash_followed_by_non_hex() {
     let err = assemble_err("DC /XYZ\n");
     assert!(

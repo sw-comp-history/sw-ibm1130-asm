@@ -68,11 +68,11 @@ pub struct Instruction {
 /// An operand expression.
 ///
 /// Most operands are a bare `Number` or `Symbol`. The `*`
-/// (location-counter) sentinel and small `±N` offsets are supported
-/// for compatibility with the historical 1130 source style
-/// (`SYM+1`, `*-2`, etc.). Full expression parsing (multi-term
-/// arithmetic) is out of scope; the offset form covers Moore's
-/// actual usage.
+/// (location-counter) sentinel, small `±N` offsets, and
+/// constant-times-term multiplications are supported for
+/// compatibility with the historical 1130 source style
+/// (`SYM+1`, `*-2`, `2*WORD`, `2*SECT+74`, etc.). Full expression
+/// parsing (multi-term arithmetic) is out of scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operand {
     Number(i64),
@@ -83,6 +83,14 @@ pub enum Operand {
     Offset {
         base: Box<Operand>,
         delta: i64,
+    },
+    /// `lhs * rhs` -- constant multiplied by sub-expression. The
+    /// left operand must parse as a numeric literal at the surface
+    /// level (no symbol-times-symbol products); the right operand
+    /// may itself be any operand.
+    Multiply {
+        lhs: i64,
+        rhs: Box<Operand>,
     },
 }
 
@@ -401,6 +409,24 @@ fn parse_operand_text(line: u32, col: u32, text: &str) -> Result<Operand, AsmErr
             delta,
         });
     }
+    // Multiplication form: `LHS*RHS` where LHS is a numeric literal.
+    // `*` is also the LC sentinel; multiplication is only valid
+    // when the `*` is NOT at position 0 (a leading `*` always means
+    // LC, possibly followed by an offset).
+    if let Some((lhs, rhs)) = split_multiply(trimmed) {
+        let lhs_value = parse_number(lhs).ok_or_else(|| {
+            AsmError::new(
+                line,
+                col,
+                format!("left operand of `*` must be a numeric literal: {lhs:?}"),
+            )
+        })?;
+        let rhs_operand = parse_operand_text(line, col, rhs)?;
+        return Ok(Operand::Multiply {
+            lhs: lhs_value,
+            rhs: Box::new(rhs_operand),
+        });
+    }
     // `*` = current location counter (pass-2-resolved).
     if trimmed == "*" {
         return Ok(Operand::LocationCounter);
@@ -420,6 +446,26 @@ fn parse_operand_text(line: u32, col: u32, text: &str) -> Result<Operand, AsmErr
         col,
         format!("invalid operand: {trimmed:?}"),
     ))
+}
+
+/// Try to split an operand token on the leftmost `*` that is NOT
+/// at position 0. A leading `*` is always the location-counter
+/// sentinel and must be handled by the LC-or-offset path.
+fn split_multiply(text: &str) -> Option<(&str, &str)> {
+    let bytes = text.as_bytes();
+    for i in 1..bytes.len() {
+        if bytes[i] != b'*' {
+            continue;
+        }
+        // Both halves must be non-empty.
+        let lhs = text[..i].trim_end();
+        let rhs = text[i + 1..].trim_start();
+        if lhs.is_empty() || rhs.is_empty() {
+            continue;
+        }
+        return Some((lhs, rhs));
+    }
+    None
 }
 
 fn parse_number(s: &str) -> Option<i64> {

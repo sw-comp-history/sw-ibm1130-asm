@@ -160,6 +160,7 @@ pub(crate) fn instruction_size_words(insn: &crate::parser::Instruction) -> i64 {
         Some(crate::parser::Operand::Symbol(_))
             | Some(crate::parser::Operand::LocationCounter)
             | Some(crate::parser::Operand::Offset { .. })
+            | Some(crate::parser::Operand::Multiply { .. })
     );
     if symbolic_operand {
         return 2;
@@ -184,6 +185,10 @@ fn resolve_pass1(op: &Operand, symtab: &SymbolTable, lc: i64, line: u32) -> Resu
         Operand::Offset { base, delta } => {
             let v = resolve_pass1(base, symtab, lc, line)?;
             Ok(v + *delta)
+        }
+        Operand::Multiply { lhs, rhs } => {
+            let v = resolve_pass1(rhs, symtab, lc, line)?;
+            Ok(*lhs * v)
         }
     }
 }

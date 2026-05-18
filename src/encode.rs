@@ -105,6 +105,7 @@ pub fn emit_pass2(lines: &[ParsedLine], symbols: &SymbolTable) -> Result<AsmOutp
                     Some(Operand::Symbol(_))
                         | Some(Operand::LocationCounter)
                         | Some(Operand::Offset { .. })
+                        | Some(Operand::Multiply { .. })
                 );
                 let want_long = (insn.long_flag
                     || insn.indirect_flag
@@ -310,6 +311,10 @@ fn resolve(op: &Operand, symbols: &SymbolTable, lc: i64, line: u32) -> Result<i6
         Operand::Offset { base, delta } => {
             let v = resolve(base, symbols, lc, line)?;
             Ok(v + *delta)
+        }
+        Operand::Multiply { lhs, rhs } => {
+            let v = resolve(rhs, symbols, lc, line)?;
+            Ok(*lhs * v)
         }
     }
 }
